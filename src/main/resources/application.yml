@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          google:
+            client-id: ${GOOGLE_OAUTH_CLIENT_ID}
+            client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET}
+            # openid/email/profile : identité de l'utilisateur ; les 2 autres : Sheets + Drive.
+            scope:
+              - openid
+              - email
+              - profile
+              - https://www.googleapis.com/auth/spreadsheets
+              - https://www.googleapis.com/auth/drive
+        # Le provider "google" est prédéfini par Spring Security.
+        # Redirect URI par défaut : {baseUrl}/login/oauth2/code/google
+        #   -> à déclarer dans la console Google Cloud.
+
+google:
+  application-name: ${GOOGLE_APPLICATION_NAME:sheets-export-poc}
+
+# Paramètres du retry (backoff exponentiel sur 429/500/503)
+sheets-export:
+  max-retries: ${SHEETS_EXPORT_MAX_RETRIES:4}
+  initial-backoff-ms: ${SHEETS_EXPORT_INITIAL_BACKOFF_MS:500}
+
+logging:
+  level:
+    com.example.sheetsexport: INFO

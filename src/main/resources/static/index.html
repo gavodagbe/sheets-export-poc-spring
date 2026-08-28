@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Inventaire — Export Google Sheet</title>
+    <style>
+        :root { color-scheme: light dark; }
+        * { box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 2rem; max-width: 900px; margin-inline: auto; line-height: 1.5;
+        }
+        h1 { margin: 0 0 1.5rem; font-size: 1.5rem; }
+        .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        button {
+            background: #1a73e8; color: #fff; border: 0; border-radius: 8px;
+            padding: .7rem 1.1rem; font-size: .95rem; font-weight: 600; cursor: pointer;
+        }
+        button:hover { background: #1765cc; }
+        button:disabled { background: #9aa0a6; cursor: default; }
+        #status { font-size: .9rem; color: #5f6368; }
+        #status a { color: #1a73e8; font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #dadce0; padding: .5rem .75rem; text-align: left; }
+        th { background: #f1f3f4; }
+        tbody tr:nth-child(even) { background: rgba(0,0,0,.03); }
+        caption { caption-side: bottom; font-size: .8rem; color: #5f6368; padding-top: .5rem; }
+    </style>
+</head>
+<body>
+<h1>Inventaire</h1>
+
+<div class="toolbar">
+    <button id="exportBtn">Exporter au format Google Sheet</button>
+    <span id="status"></span>
+</div>
+
+<table id="data">
+    <thead>
+        <tr><th>Produit</th><th>Quantité</th><th>Statut</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Café en grains 1kg</td><td>12</td><td></td></tr>
+        <tr><td>Thé vert (boîte 50)</td><td>5</td><td></td></tr>
+        <tr><td>Sucre blanc 1kg</td><td>30</td><td></td></tr>
+        <tr><td>Filtres n°4 (x100)</td><td>3</td><td></td></tr>
+        <tr><td>Lait demi-écrémé 1L</td><td>18</td><td></td></tr>
+    </tbody>
+    <caption>
+        La colonne « Statut » recevra un menu déroulant :
+        « À commander », « En stock », « Rupture » (alimenté par un onglet caché <code>RefData</code>).
+    </caption>
+</table>
+
+<script>
+    // Options du menu déroulant + index (0-based) de la colonne cible dans le tableau.
+    const DROPDOWN_OPTIONS = ["À commander", "En stock", "Rupture"];
+    const DROPDOWN_COLUMN_INDEX = 2; // colonne « Statut »
+
+    const btn = document.getElementById('exportBtn');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(html) { statusEl.innerHTML = html; }
+
+    // Lit le tableau HTML -> [{ "Produit": "...", "Quantité": "...", "Statut": "" }, ...]
+    function readTable() {
+        const headers = [...document.querySelectorAll('#data thead th')].map(th => th.textContent.trim());
+        return [...document.querySelectorAll('#data tbody tr')].map(tr => {
+            const cells = [...tr.querySelectorAll('td')];
+            const row = {};
+            headers.forEach((h, i) => row[h] = (cells[i]?.textContent ?? '').trim());
+            return row;
+        });
+    }
+
+    async function runExport(fromUserClick) {
+        btn.disabled = true;
+        setStatus('Génération du Google Sheet…');
+
+        // Ouvre l'onglet tout de suite (geste utilisateur) pour éviter le blocage popup.
+        const newTab = fromUserClick ? window.open('about:blank', '_blank') : null;
+
+        const payload = {
+            sheetTitle: 'Inventaire ' + new Date().toLocaleDateString('fr-FR'),
+            rows: readTable(),
+            dropdownOptions: DROPDOWN_OPTIONS,
+            dropdownColumnIndex: DROPDOWN_COLUMN_INDEX
+        };
+
+        let res;
+        try {
+            res = await fetch('/api/exports/sheet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } catch (e) {
+            if (newTab) newTab.close();
+            btn.disabled = false;
+            setStatus('Erreur réseau : ' + e.message);
+            return;
+        }
+
+        if (res.status === 401) {
+            // Pas (ou plus) de session Google : on lance le consentement,
+            // et on relance l'export automatiquement au retour.
+            if (newTab) newTab.close();
+            sessionStorage.setItem('exportAfterLogin', '1');
+            window.location.href = '/oauth2/authorization/google';
+            return;
+        }
+
+        if (!res.ok) {
+            if (newTab) newTab.close();
+            btn.disabled = false;
+            const err = await res.json().catch(() => ({}));
+            setStatus('Erreur : ' + (err.message || ('HTTP ' + res.status)));
+            return;
+        }
+
+        const data = await res.json();
+        btn.disabled = false;
+        if (newTab) {
+            newTab.location = data.spreadsheetUrl;
+            setStatus('Google Sheet créé ✔');
+        } else {
+            setStatus('Google Sheet créé ✔ — <a href="' + data.spreadsheetUrl + '" target="_blank" rel="noopener">Ouvrir</a>');
+        }
+    }
+
+    btn.addEventListener('click', () => runExport(true));
+
+    // Retour du consentement Google : on rejoue l'export demandé avant la redirection.
+    if (sessionStorage.getItem('exportAfterLogin')) {
+        sessionStorage.removeItem('exportAfterLogin');
+        runExport(false);
+    }
+</script>
+</body>
+</html>

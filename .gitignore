@@ -1,0 +1,11 @@
+target/
+
+### Secrets ###
+.env
+credentials/*.json
+
+### IDE ###
+.idea/
+*.iml
+.vscode/
+*.log

@@ -1,0 +1,11 @@
+services:
+  sheets-export-poc:
+    build: .
+    container_name: sheets-export-poc
+    ports:
+      - "8080:8080"
+    environment:
+      GOOGLE_APPLICATION_NAME: sheets-export-poc
+      # Requis : identifiants du client OAuth "Web application" (voir .env.example).
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?renseigner GOOGLE_OAUTH_CLIENT_ID dans .env}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?renseigner GOOGLE_OAUTH_CLIENT_SECRET dans .env}
