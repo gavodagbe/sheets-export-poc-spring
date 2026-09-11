@@ -10,10 +10,12 @@ import java.util.Map;
 /**
  * Mode {@code "inline"} : les données viennent du front (lecture du tableau HTML).
  *
- * @param rows                lignes ; chaque map = une ligne (clé = nom de colonne). L'ordre des
- *                            clés de la 1re ligne définit l'ordre des colonnes / l'entête.
- * @param dropdownOptions     valeurs source du dropdown (écrites dans l'onglet caché RefData)
- * @param dropdownColumnIndex index (0-based) de la colonne de l'onglet Data qui reçoit le dropdown
+ * @param rows                  lignes ; chaque map = une ligne (clé = nom de colonne). L'ordre des
+ *                              clés de la 1re ligne définit l'ordre des colonnes / l'entête.
+ * @param dropdownOptions       valeurs source du dropdown (écrites dans l'onglet caché RefData)
+ * @param dropdownColumnIndex   index (0-based) de la colonne de l'onglet Data qui reçoit le dropdown
+ * @param dependentColumnIndex index (0-based) optionnel de la colonne dépendante
+ * @param dependentOptionsMap   mapping parent -> liste enfants optionnel
  */
 public record InlineSource(
 
@@ -25,7 +27,12 @@ public record InlineSource(
 
         @NotNull
         @Min(0)
-        Integer dropdownColumnIndex
+        Integer dropdownColumnIndex,
+
+        Integer dependentColumnIndex,
+
+        Map<String, List<String>> dependentOptionsMap
 
 ) implements ExportSource {
 }
+
