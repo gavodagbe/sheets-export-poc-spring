@@ -89,11 +89,14 @@
     }
 
     function inlineSource() {
+        const dep = previewDef && previewDef.dropdown ? previewDef.dropdown.dependentDropdown : null;
         return {
             type: 'inline',
             rows: readTable(),
             dropdownOptions: previewDef.dropdown.options,
-            dropdownColumnIndex: previewDef.dropdown.columnIndex
+            dropdownColumnIndex: previewDef.dropdown.columnIndex,
+            dependentColumnIndex: dep ? dep.dependentColumnIndex : null,
+            dependentOptionsMap: dep ? dep.dependentOptionsMap : null
         };
     }
     function datasetSource(datasetId, filters) {
@@ -173,11 +176,20 @@
         });
 
         const col = def.columns[def.dropdown.columnIndex];
-        dataCaption.innerHTML = 'Données chargées depuis <code>/api/datasets/' + def.id +
+        const dep = def.dropdown ? def.dropdown.dependentDropdown : null;
+        const depCol = dep ? def.columns[dep.dependentColumnIndex] : null;
+
+        let captionText = 'Données chargées depuis <code>/api/datasets/' + def.id +
             '/rows</code>. La colonne « ' + (col ? col.label : '?') + ' » recevra un menu déroulant : ' +
-            def.dropdown.options.map(o => '« ' + o + ' »').join(', ') +
-            ' (onglet caché <code>RefData</code>).';
+            def.dropdown.options.map(o => '« ' + o + ' »').join(', ');
+        
+        if (dep) {
+            captionText += '. La colonne « ' + (depCol ? depCol.label : '?') + ' » recevra un menu déroulant dépendant en cascade';
+        }
+
+        dataCaption.innerHTML = captionText + ' (onglet caché <code>RefData</code>).';
     }
+
 
     async function loadPreview(defsById) {
         previewDef = defsById[PREVIEW_DATASET_ID];

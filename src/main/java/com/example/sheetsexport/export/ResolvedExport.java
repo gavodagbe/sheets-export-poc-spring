@@ -7,17 +7,35 @@ import java.util.Map;
  * Export « à plat », prêt à être poussé vers Google — quelle que soit la source d'origine
  * ({@code inline} ou {@code dataset}). C'est ce que consomme {@code GoogleSheetsExportService}.
  *
- * @param sheetTitle          titre du spreadsheet
- * @param shareWithEmail      email tiers ou {@code null}
- * @param rows                lignes ; chaque map = une ligne (clé = entête de colonne, ordre préservé)
- * @param dropdownOptions     valeurs du menu déroulant
- * @param dropdownColumnIndex index (0-based) de la colonne recevant le menu déroulant
+ * @param sheetTitle             titre du spreadsheet
+ * @param shareWithEmail         email tiers ou {@code null}
+ * @param rows                   lignes ; chaque map = une ligne (clé = entête de colonne, ordre préservé)
+ * @param dropdownOptions        valeurs du menu déroulant principal
+ * @param dropdownColumnIndex    index (0-based) de la colonne recevant le menu déroulant principal
+ * @param dependentColumnIndex  index (0-based) optionnel de la colonne recevant le menu déroulant dépendant
+ * @param dependentOptionsMap    mapping parent -> liste des options enfants autorisées
  */
 public record ResolvedExport(
         String sheetTitle,
         String shareWithEmail,
         List<Map<String, Object>> rows,
         List<String> dropdownOptions,
-        int dropdownColumnIndex
+        int dropdownColumnIndex,
+        Integer dependentColumnIndex,
+        Map<String, List<String>> dependentOptionsMap
 ) {
+    public ResolvedExport(
+            String sheetTitle,
+            String shareWithEmail,
+            List<Map<String, Object>> rows,
+            List<String> dropdownOptions,
+            int dropdownColumnIndex
+    ) {
+        this(sheetTitle, shareWithEmail, rows, dropdownOptions, dropdownColumnIndex, null, null);
+    }
+
+    public boolean hasDependentDropdown() {
+        return dependentColumnIndex != null && dependentOptionsMap != null && !dependentOptionsMap.isEmpty();
+    }
 }
+

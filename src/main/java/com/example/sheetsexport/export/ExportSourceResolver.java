@@ -55,7 +55,9 @@ public class ExportSourceResolver {
                 request.shareWithEmail(),
                 inline.rows(),
                 inline.dropdownOptions(),
-                inline.dropdownColumnIndex());
+                inline.dropdownColumnIndex(),
+                inline.dependentColumnIndex(),
+                inline.dependentOptionsMap());
     }
 
     private ResolvedExport fromDataset(SheetExportRequest request, DatasetSource source) {
@@ -70,11 +72,21 @@ public class ExportSourceResolver {
         List<Map<String, Object>> orderedRows = def.toLabeledRows(rawRows);
 
         DropdownConfig dropdown = def.dropdown();
+        Integer depCol = null;
+        Map<String, List<String>> depMap = null;
+        if (dropdown != null && dropdown.dependentDropdown() != null) {
+            depCol = dropdown.dependentDropdown().dependentColumnIndex();
+            depMap = dropdown.dependentDropdown().dependentOptionsMap();
+        }
+
         return new ResolvedExport(
                 request.sheetTitle(),
                 request.shareWithEmail(),
                 orderedRows,
-                dropdown.options(),
-                dropdown.columnIndex());
+                dropdown != null ? dropdown.options() : List.of(),
+                dropdown != null ? dropdown.columnIndex() : 0,
+                depCol,
+                depMap);
     }
+
 }

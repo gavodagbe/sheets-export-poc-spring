@@ -96,9 +96,12 @@ class ExportControllerTest {
         org.mockito.Mockito.verify(exportService).export(eq("access-token"), captor.capture());
         ResolvedExport resolved = captor.getValue();
         assertThat(resolved.rows()).hasSize(3);
-        assertThat(resolved.rows().get(0)).containsKeys("Produit", "Quantité", "Entrepôt", "Statut");
-        assertThat(resolved.dropdownColumnIndex()).isEqualTo(3);
-        assertThat(resolved.dropdownOptions()).containsExactly("À commander", "En stock", "Rupture");
+        assertThat(resolved.rows().get(0)).containsKeys("Produit", "Quantité", "Catégorie", "Sous-Catégorie", "Entrepôt");
+        assertThat(resolved.dropdownColumnIndex()).isEqualTo(2);
+        assertThat(resolved.dropdownOptions()).containsExactly("Boissons", "Épicerie", "Fournitures");
+        assertThat(resolved.hasDependentDropdown()).isTrue();
+        assertThat(resolved.dependentColumnIndex()).isEqualTo(3);
+        assertThat(resolved.dependentOptionsMap()).containsKey("Boissons");
     }
 
     @Test
@@ -140,7 +143,8 @@ class ExportControllerTest {
         mockMvc.perform(get("/api/datasets"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value("inventory"))
-                .andExpect(jsonPath("$[0].dropdown.columnIndex").value(3));
+                .andExpect(jsonPath("$[0].dropdown.columnIndex").value(2))
+                .andExpect(jsonPath("$[0].dropdown.dependentDropdown.dependentColumnIndex").value(3));
     }
 
     @Test
@@ -148,7 +152,7 @@ class ExportControllerTest {
         mockMvc.perform(get("/api/datasets/inventory/rows"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.columns").value(org.hamcrest.Matchers.contains(
-                        "Produit", "Quantité", "Entrepôt", "Statut")))
+                        "Produit", "Quantité", "Catégorie", "Sous-Catégorie", "Entrepôt")))
                 .andExpect(jsonPath("$.rows.length()").value(8))
                 .andExpect(jsonPath("$.rows[0]['Produit']").value("Café en grains 1kg"));
 
@@ -157,3 +161,4 @@ class ExportControllerTest {
                 .andExpect(jsonPath("$.rows.length()").value(1));
     }
 }
+

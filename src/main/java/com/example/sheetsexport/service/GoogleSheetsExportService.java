@@ -95,7 +95,7 @@ public class GoogleSheetsExportService {
 
             // --- 2. Remplissage des 2 onglets -------------------------------------------------
             List<List<Object>> dataValues = buildDataValues(request.rows());
-            List<List<Object>> refValues = buildRefValues(request.dropdownOptions());
+            List<List<Object>> refValues = buildRefValues(request, dataValues.size());
 
             // On n'envoie que les plages effectivement remplies (l'API rejette un ValueRange vide).
             List<ValueRange> valueRanges = new ArrayList<>();
@@ -108,7 +108,7 @@ public class GoogleSheetsExportService {
 
             if (!valueRanges.isEmpty()) {
                 BatchUpdateValuesRequest valuesBody = new BatchUpdateValuesRequest()
-                        .setValueInputOption("RAW")
+                        .setValueInputOption("USER_ENTERED")
                         .setData(valueRanges);
                 retry.execute("values.batchUpdate", () ->
                         sheets.spreadsheets().values().batchUpdate(spreadsheetId, valuesBody).execute());
@@ -175,56 +175,161 @@ public class GoogleSheetsExportService {
         return values;
     }
 
-    /** Une valeur du dropdown par ligne dans la colonne A de RefData. */
-    private List<List<Object>> buildRefValues(List<String> options) {
-        List<List<Object>> values = new ArrayList<>(options.size());
-        for (String option : options) {
-            values.add(List.of(option));
+    /**
+     * Construit les données de l'onglet caché RefData :
+     * Col A : Options parentes
+     * Col B : Formule dynamique TRANSPOSE(FILTER(...)) pour chaque ligne de Data (si dropdown dépendant)
+     * Col B à Z : Espaces vides réservés à l'expansion de TRANSPOSE
+     * Col AA & AB : Table de mapping (Parent, Enfant)
+     */
+    private List<List<Object>> buildRefValues(ResolvedExport request, int dataRowCount) {
+        List<String> parentOptions = request.dropdownOptions();
+        boolean hasDep = request.hasDependentDropdown();
+
+        List<Map.Entry<String, String>> mappingPairs = new ArrayList<>();
+        if (hasDep) {
+            for (Map.Entry<String, List<String>> entry : request.dependentOptionsMap().entrySet()) {
+                String parent = entry.getKey();
+                if (entry.getValue() != null) {
+                    for (String child : entry.getValue()) {
+                        mappingPairs.add(Map.entry(parent, child));
+                    }
+                }
+            }
         }
-        return values;
+
+        int mappingCount = mappingPairs.size();
+        int parentCount = parentOptions != null ? parentOptions.size() : 0;
+        int maxRows = Math.max(parentCount, mappingCount + 1);
+        maxRows = Math.max(maxRows, dataRowCount);
+        if (maxRows == 0) {
+            maxRows = 1;
+        }
+
+        String parentColLetter = getColumnLetter(request.dropdownColumnIndex());
+        int mapEndRow = Math.max(2, mappingCount + 1);
+
+        List<List<Object>> refRows = new ArrayList<>(maxRows);
+        for (int r = 0; r < maxRows; r++) {
+            List<Object> row = new ArrayList<>();
+            // Col A (index 0): Parent Option
+            String parentOpt = (parentOptions != null && r < parentOptions.size()) ? parentOptions.get(r) : "";
+            row.add(parentOpt);
+
+            // Col B (index 1): Formule pour la ligne r+1 dans Data (pour r >= 1)
+            if (hasDep && r >= 1 && r < dataRowCount) {
+                int dataRowIndex = r + 1; // 1-based row index dans Sheet (Row 2, 3...)
+                String formula = "=IFERROR(TRANSPOSE(FILTER($AB$2:$AB$" + mapEndRow + ", $AA$2:$AA$" + mapEndRow + " = Data!" + parentColLetter + dataRowIndex + ")), \"\")";
+                row.add(formula);
+            } else {
+                row.add("");
+            }
+
+            // Col C à Z (indices 2 à 25) : vides pour laisser TRANSPOSE s'étendre
+            if (hasDep) {
+                for (int c = 2; c < 26; c++) {
+                    row.add("");
+                }
+
+                // Col AA & AB (indices 26 et 27) : Table de mapping
+                if (r == 0) {
+                    row.add("Parent");
+                    row.add("Child");
+                } else if (r - 1 < mappingCount) {
+                    Map.Entry<String, String> pair = mappingPairs.get(r - 1);
+                    row.add(pair.getKey());
+                    row.add(pair.getValue());
+                } else {
+                    row.add("");
+                    row.add("");
+                }
+            }
+
+            refRows.add(row);
+        }
+        return refRows;
+    }
+
+
+    private static String getColumnLetter(int colIndex) {
+        StringBuilder sb = new StringBuilder();
+        int col = colIndex;
+        while (col >= 0) {
+            sb.insert(0, (char) ('A' + (col % 26)));
+            col = (col / 26) - 1;
+        }
+        return sb.toString();
     }
 
     /**
-     * Construit la requête batchUpdate qui pose la règle de data validation.
-     * Condition ONE_OF_RANGE : la valeur autorisée est n'importe quelle cellule de
-     * la plage {@code RefData!A1:A<n>} (onglet caché).
-     *
-     * @param dataRowCount nombre de lignes écrites dans Data (entête incluse)
+     * Construit la requête batchUpdate qui pose les règles de data validation.
      */
     private BatchUpdateSpreadsheetRequest buildDataValidationBatch(ResolvedExport request, int dataRowCount) {
-        int col = request.dropdownColumnIndex();
-        int optionCount = request.dropdownOptions().size();
+        List<Request> requests = new ArrayList<>();
 
-        // Plage cible : de la 1re ligne de données (sous l'entête) jusqu'à la dernière ligne.
-        // Si aucune donnée, on applique quand même la validation sur une ligne pour la démo.
         int startRow = 1;
         int endRow = Math.max(dataRowCount, startRow + 1);
 
-        GridRange targetRange = new GridRange()
-                .setSheetId(DATA_SHEET_ID)
-                .setStartRowIndex(startRow)
-                .setEndRowIndex(endRow)
-                .setStartColumnIndex(col)
-                .setEndColumnIndex(col + 1);
+        // 1. Validation du Dropdown Parent
+        if (request.dropdownOptions() != null && !request.dropdownOptions().isEmpty()) {
+            int parentCol = request.dropdownColumnIndex();
+            int parentOptionCount = request.dropdownOptions().size();
 
-        // Référence de plage vers l'onglet caché. Le "=" est requis pour ONE_OF_RANGE.
-        ConditionValue rangeRef = new ConditionValue()
-                .setUserEnteredValue("=" + REF_SHEET_TITLE + "!A1:A" + optionCount);
+            GridRange parentTargetRange = new GridRange()
+                    .setSheetId(DATA_SHEET_ID)
+                    .setStartRowIndex(startRow)
+                    .setEndRowIndex(endRow)
+                    .setStartColumnIndex(parentCol)
+                    .setEndColumnIndex(parentCol + 1);
 
-        BooleanCondition condition = new BooleanCondition()
-                .setType("ONE_OF_RANGE")
-                .setValues(List.of(rangeRef));
+            ConditionValue parentRangeRef = new ConditionValue()
+                    .setUserEnteredValue("=" + REF_SHEET_TITLE + "!A1:A" + parentOptionCount);
 
-        DataValidationRule rule = new DataValidationRule()
-                .setCondition(condition)
-                .setShowCustomUi(true)   // affiche la flèche de dropdown dans la cellule
-                .setStrict(false);       // n'empêche pas une saisie hors liste (mise en garde seulement)
+            BooleanCondition parentCondition = new BooleanCondition()
+                    .setType("ONE_OF_RANGE")
+                    .setValues(List.of(parentRangeRef));
 
-        SetDataValidationRequest setDataValidation = new SetDataValidationRequest()
-                .setRange(targetRange)
-                .setRule(rule);
+            DataValidationRule parentRule = new DataValidationRule()
+                    .setCondition(parentCondition)
+                    .setShowCustomUi(true)
+                    .setStrict(false);
 
-        return new BatchUpdateSpreadsheetRequest()
-                .setRequests(List.of(new Request().setSetDataValidation(setDataValidation)));
+            requests.add(new Request().setSetDataValidation(new SetDataValidationRequest()
+                    .setRange(parentTargetRange)
+                    .setRule(parentRule)));
+        }
+
+        // 2. Validation du Dropdown Dépendant (par ligne)
+        if (request.hasDependentDropdown()) {
+            int depCol = request.dependentColumnIndex();
+            for (int r = startRow; r < endRow; r++) {
+                int sheetRowNumber = r + 1; // 1-based row number (e.g. 2, 3...)
+                GridRange depTargetRange = new GridRange()
+                        .setSheetId(DATA_SHEET_ID)
+                        .setStartRowIndex(r)
+                        .setEndRowIndex(r + 1)
+                        .setStartColumnIndex(depCol)
+                        .setEndColumnIndex(depCol + 1);
+
+                ConditionValue depRangeRef = new ConditionValue()
+                        .setUserEnteredValue("=" + REF_SHEET_TITLE + "!B" + sheetRowNumber + ":Z" + sheetRowNumber);
+
+                BooleanCondition depCondition = new BooleanCondition()
+                        .setType("ONE_OF_RANGE")
+                        .setValues(List.of(depRangeRef));
+
+                DataValidationRule depRule = new DataValidationRule()
+                        .setCondition(depCondition)
+                        .setShowCustomUi(true)
+                        .setStrict(false);
+
+                requests.add(new Request().setSetDataValidation(new SetDataValidationRequest()
+                        .setRange(depTargetRange)
+                        .setRule(depRule)));
+            }
+        }
+
+        return new BatchUpdateSpreadsheetRequest().setRequests(requests);
     }
 }
+
