@@ -3,7 +3,7 @@ package com.example.sheetsexport.service;
 import com.example.sheetsexport.exception.InvalidAccessTokenException;
 import com.example.sheetsexport.exception.QuotaExceededException;
 import com.example.sheetsexport.exception.SheetsExportException;
-import com.example.sheetsexport.web.dto.SheetExportRequest;
+import com.example.sheetsexport.export.ResolvedExport;
 import com.example.sheetsexport.web.dto.SheetExportResponse;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.services.drive.Drive;
@@ -63,9 +63,9 @@ public class GoogleSheetsExportService {
 
     /**
      * @param accessToken access token OAuth de l'utilisateur (scopes spreadsheets + drive)
-     * @param request     paramètres de l'export
+     * @param request     export résolu à plat (voir {@code ExportSourceResolver})
      */
-    public SheetExportResponse export(String accessToken, SheetExportRequest request) {
+    public SheetExportResponse export(String accessToken, ResolvedExport request) {
         // Clients construits pour CE token : le fichier appartiendra à l'utilisateur.
         Sheets sheets = clientFactory.sheets(accessToken);
         Drive drive = clientFactory.drive(accessToken);
@@ -191,7 +191,7 @@ public class GoogleSheetsExportService {
      *
      * @param dataRowCount nombre de lignes écrites dans Data (entête incluse)
      */
-    private BatchUpdateSpreadsheetRequest buildDataValidationBatch(SheetExportRequest request, int dataRowCount) {
+    private BatchUpdateSpreadsheetRequest buildDataValidationBatch(ResolvedExport request, int dataRowCount) {
         int col = request.dropdownColumnIndex();
         int optionCount = request.dropdownOptions().size();
 

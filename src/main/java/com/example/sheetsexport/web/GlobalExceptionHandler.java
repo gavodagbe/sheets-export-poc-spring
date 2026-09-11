@@ -1,5 +1,6 @@
 package com.example.sheetsexport.web;
 
+import com.example.sheetsexport.dataset.UnknownDatasetException;
 import com.example.sheetsexport.exception.InvalidAccessTokenException;
 import com.example.sheetsexport.exception.QuotaExceededException;
 import com.example.sheetsexport.exception.SheetsExportException;
@@ -40,6 +41,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         ex.getBindingResult().getFieldErrors()
                 .forEach(fe -> fieldErrors.putIfAbsent(fe.getField(), fe.getDefaultMessage()));
         return ResponseEntity.badRequest().body(body(HttpStatus.BAD_REQUEST, "Requête invalide", fieldErrors));
+    }
+
+    /** {@code datasetId} inconnu du catalogue. */
+    @ExceptionHandler(UnknownDatasetException.class)
+    public ResponseEntity<Map<String, Object>> handleUnknownDataset(UnknownDatasetException ex) {
+        return ResponseEntity.badRequest().body(body(HttpStatus.BAD_REQUEST, ex.getMessage(), null));
     }
 
     @ExceptionHandler(InvalidAccessTokenException.class)

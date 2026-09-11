@@ -10,7 +10,11 @@ Le Sheet contient :
 - un onglet **`RefData`** (`hidden: true`) : la liste de valeurs source du menu déroulant (`ONE_OF_RANGE`) ;
 - partage **optionnel** avec un email tiers (role `writer`).
 
-Un nouveau fichier est créé **à chaque clic**. **Aucune base de données**, aucun spreadsheet ID persisté.
+Un nouveau fichier est créé **à chaque clic**. Aucun spreadsheet ID persisté.
+
+Les données à exporter viennent au choix **du DOM** (mode `inline`, historique) ou **du serveur**
+(mode `dataset` : un `DatasetProvider` va chercher les lignes — ici données statiques, prévu pour
+être remplacé par une requête base de données). Voir [§4 « Deux sources de données »](#deux-sources-de-données).
 
 ---
 
@@ -106,35 +110,64 @@ Puis ouvrir **<http://localhost:8080/>**.
 
 Ouvrir <http://localhost:8080/>, cliquer **« Exporter au format Google Sheet »**.
 
-Le tableau de la page est un exemple d'inventaire (colonnes *Produit / Quantité / Statut*).
-Le menu déroulant est posé sur la colonne **Statut** (index `2`), valeurs
-`À commander / En stock / Rupture`.
+Le tableau de la page est chargé depuis le serveur (`GET /api/datasets/inventory/rows`) : entêtes,
+lignes et valeurs du menu déroulant viennent tous du `DatasetProvider`, rien n'est codé en dur
+dans `index.html`. Le menu déroulant est posé sur la colonne **Statut**.
 
 Pour partager le fichier avec un tiers, ajouter `shareWithEmail` au payload construit par le
 front (`src/main/resources/static/index.html`).
+
+### Deux sources de données
+
+Le payload porte un champ **`source`** polymorphe (discriminant `type`). Le service Google, lui,
+est agnostique : il consomme un `ResolvedExport` à plat produit par `ExportSourceResolver`.
+
+| `source.type` | Origine des lignes | Config du dropdown |
+|---|---|---|
+| `inline` | fournies par le front (lecture du DOM) — mais **le DOM lui-même est hydraté depuis le serveur** (`GET /api/datasets/{id}/rows`), rien n'est codé en dur dans la page | fournie par le front (reprise de `dropdown` du catalogue) |
+| `dataset` | **résolues côté serveur** via un `DatasetProvider` (ici : données statiques ; à remplacer par une requête BDD) | imposée par le serveur (`DatasetDefinition`) |
+
+En mode `dataset`, le client n'envoie que `datasetId` + `filters` : il ne peut ni falsifier les
+valeurs, ni exfiltrer une colonne absente du catalogue. Les `datasetId` sont **whitelistés**
+(`DatasetCatalog` indexe les `DatasetProvider` du contexte Spring).
+
+> **Pour brancher une vraie base** : implémenter un `DatasetProvider` (`@Component`) dont
+> `fetchRows(filters)` interroge un repository JPA/JDBC. Rien d'autre à toucher — voir le javadoc
+> de `DatasetProvider` pour un exemple.
 
 ### API sous-jacente
 
 `POST /api/exports/sheet` — **exige une session authentifiée** (cookie ; sinon `401`).
 
 ```json
-// body
+// body — mode "inline" (données du DOM)
 {
   "sheetTitle": "Inventaire 28/08/2026",
   "shareWithEmail": "collegue@example.com",   // optionnel
-  "rows": [
-    { "Produit": "Café", "Quantité": "12", "Statut": "" }
-  ],
-  "dropdownOptions": ["À commander", "En stock", "Rupture"],
-  "dropdownColumnIndex": 2
+  "source": {
+    "type": "inline",
+    "rows": [ { "Produit": "Café", "Quantité": "12", "Statut": "" } ],
+    "dropdownOptions": ["À commander", "En stock", "Rupture"],
+    "dropdownColumnIndex": 2
+  }
 }
-// réponse
+
+// body — mode "dataset" (données résolues côté serveur)
+{
+  "sheetTitle": "Inventaire LYON-02",
+  "source": { "type": "dataset", "datasetId": "inventory", "filters": { "warehouse": "LYON-02" } }
+}
+
+// réponse (identique dans les deux cas)
 { "spreadsheetId": "1AbC...", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1AbC.../edit" }
 ```
 
 | Autres routes | |
 |---|---|
-| `GET /` | page HTML (tableau + bouton) |
+| `GET /` | page HTML (tableau + boutons d'export) |
+| `GET /api/datasets` | catalogue des jeux de données (id, libellé, colonnes, config dropdown) — public, métadonnées |
+| `GET /api/datasets/{id}` | métadonnées d'un jeu de données |
+| `GET /api/datasets/{id}/rows` | contenu (`{ columns, rows }`) résolu côté serveur ; query params = filtres |
 | `GET /api/session` | `{ "authenticated": bool, "email": string\|null }` |
 | `GET /oauth2/authorization/google` | démarre le consentement Google (géré par Spring Security) |
 | `POST /logout` | ferme la session |
@@ -143,7 +176,7 @@ front (`src/main/resources/static/index.html`).
 
 | HTTP | Quand |
 |---|---|
-| `400` | body invalide (titre manquant, email mal formé, `dropdownOptions` vide, index < 0) — détail par champ dans `details` |
+| `400` | body invalide (titre manquant, email mal formé, `dropdownOptions` vide, index < 0) — détail par champ dans `details` ; ou `datasetId` inconnu du catalogue |
 | `401` | pas de session Google / session expirée → le front relance le consentement |
 | `429` | quota Google dépassé même après retries |
 | `502` | autre erreur renvoyée par l'API Google |
@@ -160,10 +193,26 @@ src/main/java/com/example/sheetsexport/
 │   ├── GoogleApiConfig.java           # beans HttpTransport + JsonFactory
 │   └── SecurityConfig.java            # oauth2Login Google ; /api/exports/** protégé ; 401 sur /api/**
 ├── web/
-│   ├── ExportController.java          # POST /api/exports/sheet — token via @RegisteredOAuth2AuthorizedClient
+│   ├── ExportController.java          # POST /api/exports/sheet — résout la source puis appelle le service
+│   ├── DatasetController.java         # GET /api/datasets[/{id}[/rows]] — catalogue + contenu
 │   ├── SessionController.java         # GET /api/session
 │   ├── GlobalExceptionHandler.java    # 400 / 401 / 429 / 502
-│   └── dto/{SheetExportRequest,SheetExportResponse}.java
+│   └── dto/
+│       ├── SheetExportRequest.java    # sheetTitle + shareWithEmail + source
+│       ├── ExportSource.java          # sealed, @JsonTypeInfo("type") → InlineSource | DatasetSource
+│       ├── InlineSource.java          # type=inline : rows + dropdownOptions + dropdownColumnIndex
+│       ├── DatasetSource.java         # type=dataset : datasetId + filters
+│       ├── DatasetRowsResponse.java   # { columns, rows } pour l'aperçu
+│       └── SheetExportResponse.java
+├── export/
+│   ├── ResolvedExport.java            # export à plat consommé par le service (peu importe la source)
+│   └── ExportSourceResolver.java      # inline → tel quel ; dataset → DatasetCatalog + réordonne les colonnes
+├── dataset/
+│   ├── DatasetProvider.java           # LA COUTURE : definition() + fetchRows(filters) — à réimplémenter en JPA
+│   ├── DatasetDefinition / DatasetColumn / DropdownConfig  # métadonnées d'un jeu de données
+│   ├── DatasetCatalog.java            # indexe les DatasetProvider par id (whitelist)
+│   ├── InventoryDatasetProvider.java  # impl STATIQUE (données en dur, filtre "warehouse")
+│   └── UnknownDatasetException.java   # → 400
 ├── service/
 │   ├── GoogleClientFactory.java       # clients Sheets/Drive à la volée depuis l'access token (header Bearer)
 │   ├── GoogleSheetsExportService.java # create(2 onglets) → values.batchUpdate → setDataValidation → partage
@@ -171,7 +220,7 @@ src/main/java/com/example/sheetsexport/
 └── exception/{InvalidAccessTokenException,QuotaExceededException,SheetsExportException}.java
 
 src/main/resources/
-├── static/index.html                 # la page : tableau + bouton + JS (fetch, relance après login)
+├── static/index.html                 # la page : tableau + bouton "inline" + boutons "dataset" (générés depuis /api/datasets)
 └── application.yml
 
 src/test/java/.../web/ExportControllerTest.java   # @SpringBootTest, service mocké, session OAuth2 simulée

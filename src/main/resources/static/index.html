@@ -12,13 +12,15 @@
             margin: 0; padding: 2rem; max-width: 900px; margin-inline: auto; line-height: 1.5;
         }
         h1 { margin: 0 0 1.5rem; font-size: 1.5rem; }
-        .toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        h2 { font-size: 1rem; margin: 2rem 0 .5rem; }
+        .toolbar { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; flex-wrap: wrap; }
         button {
             background: #1a73e8; color: #fff; border: 0; border-radius: 8px;
             padding: .7rem 1.1rem; font-size: .95rem; font-weight: 600; cursor: pointer;
         }
-        button:hover { background: #1765cc; }
-        button:disabled { background: #9aa0a6; cursor: default; }
+        button.secondary { background: #188038; }
+        button:hover { filter: brightness(.93); }
+        button:disabled { background: #9aa0a6; cursor: default; filter: none; }
         #status { font-size: .9rem; color: #5f6368; }
         #status a { color: #1a73e8; font-weight: 600; }
         table { border-collapse: collapse; width: 100%; }
@@ -26,47 +28,59 @@
         th { background: #f1f3f4; }
         tbody tr:nth-child(even) { background: rgba(0,0,0,.03); }
         caption { caption-side: bottom; font-size: .8rem; color: #5f6368; padding-top: .5rem; }
+        .hint { font-size: .85rem; color: #5f6368; margin: .25rem 0 0; }
     </style>
 </head>
 <body>
 <h1>Inventaire</h1>
 
 <div class="toolbar">
-    <button id="exportBtn">Exporter au format Google Sheet</button>
     <span id="status"></span>
 </div>
 
+<h2>1. Export « inline » — le front lit le DOM et envoie les lignes</h2>
+<p class="hint">
+    La table ci-dessous, ses entêtes et les valeurs du menu déroulant sont <strong>chargées depuis
+    le serveur</strong> (<code>GET /api/datasets/{id}/rows</code>) — rien n'est codé en dur dans la page.
+    Le bouton relit ensuite ce DOM et le renvoie tel quel.
+</p>
+<div class="toolbar">
+    <button id="exportDomBtn" disabled>Exporter le tableau au format Google Sheet</button>
+</div>
+
 <table id="data">
-    <thead>
-        <tr><th>Produit</th><th>Quantité</th><th>Statut</th></tr>
-    </thead>
-    <tbody>
-        <tr><td>Café en grains 1kg</td><td>12</td><td></td></tr>
-        <tr><td>Thé vert (boîte 50)</td><td>5</td><td></td></tr>
-        <tr><td>Sucre blanc 1kg</td><td>30</td><td></td></tr>
-        <tr><td>Filtres n°4 (x100)</td><td>3</td><td></td></tr>
-        <tr><td>Lait demi-écrémé 1L</td><td>18</td><td></td></tr>
-    </tbody>
-    <caption>
-        La colonne « Statut » recevra un menu déroulant :
-        « À commander », « En stock », « Rupture » (alimenté par un onglet caché <code>RefData</code>).
-    </caption>
+    <thead><tr id="dataHead"></tr></thead>
+    <tbody id="dataBody"></tbody>
+    <caption id="dataCaption"></caption>
 </table>
 
-<script>
-    // Options du menu déroulant + index (0-based) de la colonne cible dans le tableau.
-    const DROPDOWN_OPTIONS = ["À commander", "En stock", "Rupture"];
-    const DROPDOWN_COLUMN_INDEX = 2; // colonne « Statut »
+<h2>2. Export « dataset » — le serveur résout tout</h2>
+<p class="hint">
+    Le navigateur n'envoie qu'un identifiant de jeu de données (+ filtres). Le serveur va chercher
+    les lignes ET impose la config du menu déroulant. Boutons générés depuis <code>GET /api/datasets</code>.
+</p>
+<div class="toolbar" id="datasetToolbar">
+    <span class="hint">Chargement des jeux de données…</span>
+</div>
 
-    const btn = document.getElementById('exportBtn');
+<script>
     const statusEl = document.getElementById('status');
+    const domBtn = document.getElementById('exportDomBtn');
+    const datasetToolbar = document.getElementById('datasetToolbar');
+    const dataHead = document.getElementById('dataHead');
+    const dataBody = document.getElementById('dataBody');
+    const dataCaption = document.getElementById('dataCaption');
+
+    // Jeu de données affiché dans la table de la section 1 (source du mode "inline").
+    const PREVIEW_DATASET_ID = 'inventory';
+    let previewDef = null;   // sa DatasetDefinition (pour la config du dropdown)
 
     function setStatus(html) { statusEl.innerHTML = html; }
 
-    // Lit le tableau HTML -> [{ "Produit": "...", "Quantité": "...", "Statut": "" }, ...]
+    // Lit la table HTML -> [{ "<libellé colonne>": "<valeur>", ... }, ...]
     function readTable() {
-        const headers = [...document.querySelectorAll('#data thead th')].map(th => th.textContent.trim());
-        return [...document.querySelectorAll('#data tbody tr')].map(tr => {
+        const headers = [...dataHead.querySelectorAll('th')].map(th => th.textContent.trim());
+        return [...dataBody.querySelectorAll('tr')].map(tr => {
             const cells = [...tr.querySelectorAll('td')];
             const row = {};
             headers.forEach((h, i) => row[h] = (cells[i]?.textContent ?? '').trim());
@@ -74,18 +88,30 @@
         });
     }
 
-    async function runExport(fromUserClick) {
-        btn.disabled = true;
-        setStatus('Génération du Google Sheet…');
+    function inlineSource() {
+        return {
+            type: 'inline',
+            rows: readTable(),
+            dropdownOptions: previewDef.dropdown.options,
+            dropdownColumnIndex: previewDef.dropdown.columnIndex
+        };
+    }
+    function datasetSource(datasetId, filters) {
+        return { type: 'dataset', datasetId, filters: filters || {} };
+    }
 
-        // Ouvre l'onglet tout de suite (geste utilisateur) pour éviter le blocage popup.
+    function setButtonsDisabled(disabled) {
+        document.querySelectorAll('.toolbar button').forEach(b => b.disabled = disabled);
+    }
+
+    async function runExport(buildSource, fromUserClick) {
+        setButtonsDisabled(true);
+        setStatus('Génération du Google Sheet…');
         const newTab = fromUserClick ? window.open('about:blank', '_blank') : null;
 
         const payload = {
             sheetTitle: 'Inventaire ' + new Date().toLocaleDateString('fr-FR'),
-            rows: readTable(),
-            dropdownOptions: DROPDOWN_OPTIONS,
-            dropdownColumnIndex: DROPDOWN_COLUMN_INDEX
+            source: buildSource()
         };
 
         let res;
@@ -97,30 +123,28 @@
             });
         } catch (e) {
             if (newTab) newTab.close();
-            btn.disabled = false;
+            setButtonsDisabled(false);
             setStatus('Erreur réseau : ' + e.message);
             return;
         }
 
         if (res.status === 401) {
-            // Pas (ou plus) de session Google : on lance le consentement,
-            // et on relance l'export automatiquement au retour.
             if (newTab) newTab.close();
-            sessionStorage.setItem('exportAfterLogin', '1');
+            sessionStorage.setItem('exportAfterLogin', JSON.stringify(payload.source));
             window.location.href = '/oauth2/authorization/google';
             return;
         }
 
         if (!res.ok) {
             if (newTab) newTab.close();
-            btn.disabled = false;
+            setButtonsDisabled(false);
             const err = await res.json().catch(() => ({}));
             setStatus('Erreur : ' + (err.message || ('HTTP ' + res.status)));
             return;
         }
 
         const data = await res.json();
-        btn.disabled = false;
+        setButtonsDisabled(false);
         if (newTab) {
             newTab.location = data.spreadsheetUrl;
             setStatus('Google Sheet créé ✔');
@@ -129,13 +153,85 @@
         }
     }
 
-    btn.addEventListener('click', () => runExport(true));
+    domBtn.addEventListener('click', () => runExport(inlineSource, true));
 
-    // Retour du consentement Google : on rejoue l'export demandé avant la redirection.
-    if (sessionStorage.getItem('exportAfterLogin')) {
-        sessionStorage.removeItem('exportAfterLogin');
-        runExport(false);
+    // --- Hydratation de la page depuis le serveur -------------------------------------------
+
+    function renderPreviewTable(def, columns, rows) {
+        dataHead.innerHTML = columns.map(c => '<th></th>').join('');
+        [...dataHead.children].forEach((th, i) => th.textContent = columns[i]);
+
+        dataBody.innerHTML = '';
+        rows.forEach(row => {
+            const tr = document.createElement('tr');
+            columns.forEach(col => {
+                const td = document.createElement('td');
+                td.textContent = row[col] ?? '';
+                tr.appendChild(td);
+            });
+            dataBody.appendChild(tr);
+        });
+
+        const col = def.columns[def.dropdown.columnIndex];
+        dataCaption.innerHTML = 'Données chargées depuis <code>/api/datasets/' + def.id +
+            '/rows</code>. La colonne « ' + (col ? col.label : '?') + ' » recevra un menu déroulant : ' +
+            def.dropdown.options.map(o => '« ' + o + ' »').join(', ') +
+            ' (onglet caché <code>RefData</code>).';
     }
+
+    async function loadPreview(defsById) {
+        previewDef = defsById[PREVIEW_DATASET_ID];
+        if (!previewDef) {
+            dataCaption.textContent = 'Jeu de données "' + PREVIEW_DATASET_ID + '" introuvable.';
+            return;
+        }
+        try {
+            const { columns, rows } = await (await fetch('/api/datasets/' + PREVIEW_DATASET_ID + '/rows')).json();
+            renderPreviewTable(previewDef, columns, rows);
+            domBtn.disabled = false;
+        } catch (e) {
+            dataCaption.textContent = 'Impossible de charger les données : ' + e.message;
+        }
+    }
+
+    function renderDatasetButtons(defs) {
+        datasetToolbar.innerHTML = '';
+        defs.forEach(def => {
+            const btn = document.createElement('button');
+            btn.className = 'secondary';
+            btn.textContent = 'Exporter : ' + def.label;
+            btn.addEventListener('click', () => runExport(() => datasetSource(def.id), true));
+            datasetToolbar.appendChild(btn);
+        });
+        if (defs.length === 0) {
+            datasetToolbar.innerHTML = '<span class="hint">Aucun jeu de données déclaré.</span>';
+        }
+    }
+
+    async function bootstrap() {
+        let defs;
+        try {
+            defs = await (await fetch('/api/datasets')).json();
+        } catch (e) {
+            datasetToolbar.innerHTML = '<span class="hint">Impossible de charger les jeux de données.</span>';
+            dataCaption.textContent = 'Serveur injoignable.';
+            return;
+        }
+        const defsById = Object.fromEntries(defs.map(d => [d.id, d]));
+        renderDatasetButtons(defs);
+        await loadPreview(defsById);
+
+        // Retour du consentement Google : on rejoue l'export demandé avant la redirection.
+        const pending = sessionStorage.getItem('exportAfterLogin');
+        if (pending) {
+            sessionStorage.removeItem('exportAfterLogin');
+            try {
+                const source = JSON.parse(pending);
+                runExport(() => source, false);
+            } catch (e) { /* payload illisible : on ignore */ }
+        }
+    }
+    bootstrap();
 </script>
 </body>
 </html>
